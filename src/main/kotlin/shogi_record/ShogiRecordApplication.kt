@@ -9,3 +9,4 @@ class ShogiRecordApplication
 fun main(args: Array<String>) {
 	runApplication<ShogiRecordApplication>(*args)
 }
+
