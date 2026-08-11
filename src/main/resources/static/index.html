@@ -35,6 +35,18 @@
   .cell.legal { background: #cdeacd; }
   .promoted { color: #c0392b; }
   #main { display: flex; gap: 24px; align-items: flex-start; }
+  #board-col { display: flex; flex-direction: column; gap: 6px; }
+  .hand {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    min-height: 42px;
+    background: #d9c9a3;
+    border: 2px solid #5a4632;
+    padding: 4px 10px;
+  }
+  .hand span { font-size: 26px; cursor: pointer; user-select: none; padding: 0 3px; }
+  .hand span.hand-selected { background: #f8e28a; border-radius: 4px; }
   #kifu {
     width: 170px;
     height: 512px;
@@ -62,10 +74,14 @@
 </style>
 </head>
 <body>
-<h1>将棋盤 v0.7 — Phase 9B 成り</h1>
+<h1>将棋盤 v0.8 — Phase 9C 駒台と打ち</h1>
 <p id="turn">☗ 先手番</p>
 <div id="main">
-  <div id="board"></div>
+  <div id="board-col">
+    <div id="hand-g" class="hand"></div>
+    <div id="board"></div>
+    <div id="hand-s" class="hand"></div>
+  </div>
   <div id="kifu"><h2>棋譜</h2><div id="kifu-list"></div></div>
 </div>
 <div id="controls">
@@ -73,7 +89,7 @@
   <button onclick="saveGame('gote')">☖ 後手勝ちで保存</button>
 </div>
 <p id="status"></p>
-<p id="note">敵陣 3 段に絡む移動で成れる (成駒は赤)。強制成りは自動。棋譜には 成 / 不成 が付く。</p>
+<p id="note">取った駒は駒台へ (成駒は元の姿に戻る)。駒台の駒をクリック → 緑のマスに打てる。二歩と行き所のない打ちは自動で禁止。</p>
 <script>
 // 盤面の「本体」はこの配列。s = 先手 (下)、g = 後手 (上)、"" = 空きマス
 const INITIAL_BOARD = [
@@ -92,14 +108,18 @@ let board = structuredClone(INITIAL_BOARD);   // 初期配置の複製から対�
 
 const boardEl = document.getElementById("board");
 
-let selected = null;   // 選択中のマス {r, c}。何も選んでなければ null
-let legal = [];        // 選択中の駒が行けるマスの一覧
+let selected = null;     // 選択中のマス {r, c}。何も選んでなければ null
+let selectedHand = null; // 選択中の持ち駒 {owner, kind}。打つモードの時だけ入る
+let legal = [];          // 選択中の駒が行けるマス (打つ時は打てるマス) の一覧
+let hands = { s: [], g: [] };   // 駒台。取った駒の種類が並ぶ
 let turn = "s";        // 手番。s = 先手、g = 後手
 let moves = [];        // 棋譜の本体 = 指した手の列。「対局を保存する」= この配列を保存すること
 
 const turnEl = document.getElementById("turn");
 const kifuEl = document.getElementById("kifu-list");
 const statusEl = document.getElementById("status");
+const handGEl = document.getElementById("hand-g");
+const handSEl = document.getElementById("hand-s");
 
 // 将棋の座標: 筋は右から９８７…、段は上から一二三…
 const FILES = ["９","８","７","６","５","４","３","２","１"];
@@ -136,6 +156,7 @@ const SLIDES = {
 
 // ===== 成り (設計会議の決定: 出発点 or 到達点が敵陣 3 段) =====
 const PROMOTE = { "歩":"と", "香":"杏", "桂":"圭", "銀":"全", "角":"馬", "飛":"竜" };
+const DEMOTE = { "と":"歩", "杏":"香", "圭":"桂", "全":"銀", "馬":"角", "竜":"飛" };  // 取られた成駒は元の姿に
 
 // 敵陣 3 段に入っているか (owner から見た敵陣)
 function inZone(owner, row) {
@@ -178,11 +199,62 @@ function legalMoves(r, c) {
   return result;
 }
 
+// ===== 打ち (設計会議の決定: 空きマスのみ・二歩禁止・行き所なし禁止) =====
+// その筋に自分の (成ってない) 歩がいるか — 二歩チェック
+function fileHasPawn(owner, c) {
+  for (let r = 0; r < 9; r++) if (board[r][c] === owner + "歩") return true;
+  return false;
+}
+
+// 持ち駒 kind を打てるマスの一覧
+function dropTargets(owner, kind) {
+  const result = [];
+  for (let r = 0; r < 9; r++) {
+    for (let c = 0; c < 9; c++) {
+      if (board[r][c] !== "") continue;                     // 空きマスのみ
+      if (mustPromote(kind, owner, r)) continue;            // 行き所のない打ち (強制成りの条件を再利用!)
+      if (kind === "歩" && fileHasPawn(owner, c)) continue; // 二歩
+      result.push([r, c]);
+    }
+  }
+  return result;
+}
+
+// 駒台クリック係
+function onHandClick(owner, kind) {
+  if (owner !== turn) return;                    // 手番側の駒台だけ触れる
+  if (selectedHand && selectedHand.kind === kind) {
+    selectedHand = null; legal = [];             // もう一回クリック → 解除
+  } else {
+    selectedHand = { owner, kind };
+    selected = null;
+    legal = dropTargets(owner, kind);
+  }
+  render();
+}
+
+// 駒台を描く係 (同じ駒はまとめて ×n 表示)
+function renderHand(el, owner) {
+  el.innerHTML = "";
+  const counts = {};
+  hands[owner].forEach(k => { counts[k] = (counts[k] || 0) + 1; });
+  for (const [k, n] of Object.entries(counts)) {
+    const span = document.createElement("span");
+    span.textContent = k + (n > 1 ? "×" + n : "");
+    if (owner === "g") span.classList.add("gote");
+    if (selectedHand && selectedHand.owner === owner && selectedHand.kind === k) span.classList.add("hand-selected");
+    span.onclick = () => onHandClick(owner, k);
+    el.appendChild(span);
+  }
+}
+
 // board 配列の中身を、画面のマス目に描き写す係
 function render() {
   turnEl.textContent = turn === "s" ? "☗ 先手番" : "☖ 後手番";
   kifuEl.innerHTML = moves.map((m, i) => (i + 1) + ". " + m).join("<br>");
   kifuEl.parentElement.scrollTop = kifuEl.parentElement.scrollHeight;  // 常に最新の手を表示
+  renderHand(handGEl, "g");
+  renderHand(handSEl, "s");
   boardEl.innerHTML = "";
   for (let r = 0; r < 9; r++) {
     for (let c = 0; c < 9; c++) {
@@ -206,7 +278,21 @@ function render() {
 
 // クリック係: 「選択中かどうか」の 2 状態を行き来する
 function onCellClick(r, c) {
-  if (selected === null) {
+  if (selectedHand !== null) {
+    // 打つモード: 打てるマスなら打つ、自分の盤上の駒なら選択切り替え
+    if (legal.some(([lr, lc]) => lr === r && lc === c)) {
+      const owner = selectedHand.owner, kind = selectedHand.kind;
+      board[r][c] = owner + kind;
+      hands[owner].splice(hands[owner].indexOf(kind), 1);   // 駒台から 1 枚減らす
+      moves.push((owner === "s" ? "☗" : "☖") + FILES[c] + RANKS[r] + kind + "打");
+      selectedHand = null; legal = [];
+      turn = turn === "s" ? "g" : "s";
+    } else if (board[r][c] !== "" && board[r][c][0] === turn) {
+      selectedHand = null;
+      selected = { r, c };
+      legal = legalMoves(r, c);
+    }
+  } else if (selected === null) {
     // 手番側の駒だけ選択できる。選んだ瞬間に行けるマスを計算しておく
     if (board[r][c] !== "" && board[r][c][0] === turn) {
       selected = { r, c };
@@ -232,9 +318,14 @@ function onCellClick(r, c) {
         suffix = "不成";
       }
     }
+    // 取り: 相手の駒がいたら、元の姿に戻して自分の駒台へ
+    if (board[r][c] !== "") {
+      const capturedKind = board[r][c].slice(1);
+      hands[owner].push(DEMOTE[capturedKind] || capturedKind);
+    }
     // 棋譜に 1 手追記: 例 "☗２三歩成" (符号は元の駒名 + 成/不成)
     moves.push((owner === "s" ? "☗" : "☖") + FILES[c] + RANKS[r] + piece.slice(1) + suffix);
-    board[r][c] = owner + kind;                    // 行き先に置く (相手の駒は上書き = 取り)
+    board[r][c] = owner + kind;                    // 行き先に置く
     board[selected.r][selected.c] = "";            // 元のマスを空に
     selected = null; legal = [];
     turn = turn === "s" ? "g" : "s";               // 手番交代
@@ -264,7 +355,9 @@ async function saveGame(winner) {
   moves = [];
   turn = "s";
   selected = null;
+  selectedHand = null;
   legal = [];
+  hands = { s: [], g: [] };
   render();
 }
 
