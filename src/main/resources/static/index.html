@@ -96,7 +96,7 @@
 </style>
 </head>
 <body>
-<h1>将棋盤 v0.13 — 対局室</h1>
+<h1>将棋盤 v0.14 — 後手視点</h1>
 <p id="turn">☗ 先手番</p>
 <p id="ws-status">⚪ 通信: 未接続</p>
 <div id="room-bar">
@@ -123,7 +123,7 @@
   <button onclick="newGameClick()">新しい対局へ</button>
 </div>
 <p id="status"></p>
-<p id="note">部屋ごとに独立した対局室。URL の ?room=名前 を共有すれば同じ部屋に入れる。部屋の先着 2 人が対局者、以降は観戦。</p>
+<p id="note">後手席に座ると、盤が自動で自分視点 (反転) になる。データは共有のまま、見せ方だけが各自の視点。</p>
 <script>
 // 盤面の「本体」はこの配列。s = 先手 (下)、g = 後手 (上)、"" = 空きマス
 const INITIAL_BOARD = [
@@ -343,15 +343,20 @@ function onHandClick(owner, kind) {
   render();
 }
 
-// 駒台を描く係 (同じ駒はまとめて ×n 表示)
-function renderHand(el, owner) {
+// 自分が後手席なら、盤を自分視点 (反転) で見せる。データはそのまま、見せ方だけの話
+function isFlipped() {
+  return myRole === "g";
+}
+
+// 駒台を描く係 (同じ駒はまとめて ×n 表示)。rotated = 上側に置かれる方 (相手の駒台) は回転
+function renderHand(el, owner, rotated) {
   el.innerHTML = "";
   const counts = {};
   hands[owner].forEach(k => { counts[k] = (counts[k] || 0) + 1; });
   for (const [k, n] of Object.entries(counts)) {
     const span = document.createElement("span");
     span.textContent = k + (n > 1 ? "×" + n : "");
-    if (owner === "g") span.classList.add("gote");
+    if (rotated) span.classList.add("gote");
     if (selectedHand && selectedHand.owner === owner && selectedHand.kind === k) span.classList.add("hand-selected");
     span.onclick = () => onHandClick(owner, k);
     el.appendChild(span);
@@ -363,21 +368,28 @@ function render() {
   turnEl.textContent = turn === "s" ? "☗ 先手番" : "☖ 後手番";
   kifuEl.innerHTML = moves.map((m, i) => (i + 1) + ". " + m.text).join("<br>");
   kifuEl.parentElement.scrollTop = kifuEl.parentElement.scrollHeight;  // 常に最新の手を表示
-  renderHand(handGEl, "g");
-  renderHand(handSEl, "s");
+  // 上の駒台 = 相手、下の駒台 = 自分 (後手席なら入れ替わる)
+  const topOwner = isFlipped() ? "s" : "g";
+  const bottomOwner = isFlipped() ? "g" : "s";
+  renderHand(handGEl, topOwner, true);
+  renderHand(handSEl, bottomOwner, false);
   boardEl.innerHTML = "";
   for (let r = 0; r < 9; r++) {
     for (let c = 0; c < 9; c++) {
+      // 画面上の位置 (r, c) に映す「本当のマス」(ar, ac)。後手席は 180 度回して見る
+      const ar = isFlipped() ? 8 - r : r;
+      const ac = isFlipped() ? 8 - c : c;
       const cell = document.createElement("div");
       cell.className = "cell";
-      if (selected && selected.r === r && selected.c === c) cell.classList.add("selected");
-      if (legal.some(([lr, lc]) => lr === r && lc === c)) cell.classList.add("legal");
-      cell.onclick = () => onCellClick(r, c);
-      const piece = board[r][c];
+      if (selected && selected.r === ar && selected.c === ac) cell.classList.add("selected");
+      if (legal.some(([lr, lc]) => lr === ar && lc === ac)) cell.classList.add("legal");
+      cell.onclick = () => onCellClick(ar, ac);
+      const piece = board[ar][ac];
       if (piece) {
         const span = document.createElement("span");
         span.textContent = piece.slice(1);      // "s歩" → "歩"
-        if (piece[0] === "g") span.classList.add("gote");        // 後手の駒は 180 度回転
+        const rotated = isFlipped() ? piece[0] === "s" : piece[0] === "g";  // 相手側の駒は回転
+        if (rotated) span.classList.add("gote");
         if ("と杏圭全馬竜".includes(piece.slice(1))) span.classList.add("promoted");  // 成駒は赤
         cell.appendChild(span);
       }
@@ -610,6 +622,7 @@ function connectWS() {
       myRole = msg.role;
       const label = myRole === "s" ? "☗ 先手" : myRole === "g" ? "☖ 後手" : "👀 観戦";
       wsStatusEl.textContent = "🟢 「" + ROOM + "」の部屋 — あなた: " + label;
+      render();   // 後手席なら、この瞬間に盤が自分視点へひっくり返る
     }
   };
 }
