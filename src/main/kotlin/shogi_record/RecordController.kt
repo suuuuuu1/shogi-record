@@ -1,7 +1,8 @@
 package shogi_record
+import org.springframework.http.ResponseEntity
 import org.springframework.web.bind.annotation.*
 data class ShogiRecord(
-    val id: Int,
+    val id: Int = 0,
     val date : String,
     val result: String,
     val side : String,
@@ -17,14 +18,17 @@ class RecordController {
     fun getAll(): List<ShogiRecord> = records
 
     @PostMapping("/records")
-    fun add(@RequestBody record: ShogiRecord): ShogiRecord{
-        records.add(record)
-        return record
+    fun add(@RequestBody record: ShogiRecord): ShogiRecord {
+        val newRecord = record.copy(id = (records.maxOfOrNull { it.id } ?: 0) + 1)
+        records.add(newRecord)
+        return newRecord
     }
 
     @GetMapping("/records/{id}")
-    fun getOne(@PathVariable id : Int ): ShogiRecord?{
-        return records.find { it.id == id }
+    fun getOne(@PathVariable id: Int): ResponseEntity<ShogiRecord> {
+        val record = records.find { it.id == id }
+        return if (record != null) ResponseEntity.ok(record)
+        else ResponseEntity.notFound().build()
     }
 
     @DeleteMapping("records/{id}")
@@ -37,7 +41,7 @@ class RecordController {
     fun update(@PathVariable id : Int, @RequestBody record: ShogiRecord): ShogiRecord?{
         val index = records.indexOfFirst {it.id == id}
         if(index == -1)return null
-        records[index] = record
+        records[index] = record.copy(id = id)
         return record
     }
 }
