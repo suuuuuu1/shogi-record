@@ -32,6 +32,8 @@
   }
   .gote { transform: rotate(180deg); }
   .cell.selected { background: #f8e28a; }
+  .cell.legal { background: #cdeacd; }
+  .promoted { color: #c0392b; }
   #main { display: flex; gap: 24px; align-items: flex-start; }
   #kifu {
     width: 170px;
@@ -60,7 +62,7 @@
 </style>
 </head>
 <body>
-<h1>将棋盤 v0.5 — Phase 8 完成形</h1>
+<h1>将棋盤 v0.7 — Phase 9B 成り</h1>
 <p id="turn">☗ 先手番</p>
 <div id="main">
   <div id="board"></div>
@@ -71,7 +73,7 @@
   <button onclick="saveGame('gote')">☖ 後手勝ちで保存</button>
 </div>
 <p id="status"></p>
-<p id="note">保存すると対局が DB に入り、盤は次の対局へリセットされる。</p>
+<p id="note">敵陣 3 段に絡む移動で成れる (成駒は赤)。強制成りは自動。棋譜には 成 / 不成 が付く。</p>
 <script>
 // 盤面の「本体」はこの配列。s = 先手 (下)、g = 後手 (上)、"" = 空きマス
 const INITIAL_BOARD = [
@@ -91,6 +93,7 @@ let board = structuredClone(INITIAL_BOARD);   // 初期配置の複製から対�
 const boardEl = document.getElementById("board");
 
 let selected = null;   // 選択中のマス {r, c}。何も選んでなければ null
+let legal = [];        // 選択中の駒が行けるマスの一覧
 let turn = "s";        // 手番。s = 先手、g = 後手
 let moves = [];        // 棋譜の本体 = 指した手の列。「対局を保存する」= この配列を保存すること
 
@@ -101,6 +104,79 @@ const statusEl = document.getElementById("status");
 // 将棋の座標: 筋は右から９８７…、段は上から一二三…
 const FILES = ["９","８","７","６","５","４","３","２","１"];
 const RANKS = ["一","二","三","四","五","六","七","八","九"];
+
+// ===== 設計会議 (8/11) で決めた駒の動きの表 =====
+// 先手基準。上 = 行が減る = -1。後手は行の符号を反転して使う。
+// 「歩く」= その位置へ 1 回だけ (途中を見ない → 桂の跳び越えもタダ)
+// 「走る」= その方向へ、ぶつかるまで何マスでも
+const KIN = [[-1,-1],[-1,0],[-1,1],[0,-1],[0,1],[1,0]];          // 金の動き
+const ALL8 = [[-1,-1],[-1,0],[-1,1],[0,-1],[0,1],[1,-1],[1,0],[1,1]];
+const NANAME = [[-1,-1],[-1,1],[1,-1],[1,1]];                    // 斜め 4 方向
+const TATEYOKO = [[-1,0],[1,0],[0,-1],[0,1]];                    // 縦横 4 方向
+
+const STEPS = {
+  "歩": [[-1,0]],
+  "香": [],
+  "桂": [[-2,-1],[-2,1]],          // かわちい命名「飛ぶ」— 歩くの仲間
+  "銀": [[-1,-1],[-1,0],[-1,1],[1,-1],[1,1]],
+  "金": KIN,
+  "王": ALL8, "玉": ALL8,
+  "角": [], "飛": [],
+  "馬": TATEYOKO,                  // 馬 = 角 + 王の縦横 (かわちい設計)
+  "竜": NANAME,                    // 竜 = 飛 + 王の斜め
+  "と": KIN, "杏": KIN, "圭": KIN, "全": KIN,   // 成駒は金の使い回し
+};
+const SLIDES = {
+  "香": [[-1,0]],
+  "角": NANAME,
+  "飛": TATEYOKO,
+  "馬": NANAME,
+  "竜": TATEYOKO,
+};
+
+// ===== 成り (設計会議の決定: 出発点 or 到達点が敵陣 3 段) =====
+const PROMOTE = { "歩":"と", "香":"杏", "桂":"圭", "銀":"全", "角":"馬", "飛":"竜" };
+
+// 敵陣 3 段に入っているか (owner から見た敵陣)
+function inZone(owner, row) {
+  return owner === "s" ? row <= 2 : row >= 6;
+}
+
+// 強制成り: 歩香は最終段、桂は最終 2 段 (かわちいの原理「前に行けなくなる駒」)
+function mustPromote(kind, owner, toR) {
+  if (kind === "歩" || kind === "香") return owner === "s" ? toR === 0 : toR === 8;
+  if (kind === "桂") return owner === "s" ? toR <= 1 : toR >= 7;
+  return false;
+}
+
+// (r, c) の駒が合法に行けるマスの一覧を返す
+function legalMoves(r, c) {
+  const piece = board[r][c];
+  if (!piece) return [];
+  const owner = piece[0];
+  const kind = piece.slice(1);
+  const sign = owner === "s" ? 1 : -1;   // 後手は前後を反転
+  const result = [];
+
+  for (const [dr, dc] of (STEPS[kind] || [])) {
+    const nr = r + dr * sign, nc = c + dc;
+    if (nr < 0 || nr > 8 || nc < 0 || nc > 8) continue;       // 盤の外はダメ
+    if (board[nr][nc] !== "" && board[nr][nc][0] === owner) continue;  // 味方の上はダメ
+    result.push([nr, nc]);
+  }
+  for (const [dr, dc] of (SLIDES[kind] || [])) {
+    let nr = r + dr * sign, nc = c + dc;
+    while (nr >= 0 && nr <= 8 && nc >= 0 && nc <= 8) {
+      if (board[nr][nc] !== "") {
+        if (board[nr][nc][0] !== owner) result.push([nr, nc]); // 敵ならそこまで行って取れる
+        break;                                                  // 誰かにぶつかったら走り終了
+      }
+      result.push([nr, nc]);
+      nr += dr * sign; nc += dc;
+    }
+  }
+  return result;
+}
 
 // board 配列の中身を、画面のマス目に描き写す係
 function render() {
@@ -113,12 +189,14 @@ function render() {
       const cell = document.createElement("div");
       cell.className = "cell";
       if (selected && selected.r === r && selected.c === c) cell.classList.add("selected");
+      if (legal.some(([lr, lc]) => lr === r && lc === c)) cell.classList.add("legal");
       cell.onclick = () => onCellClick(r, c);
       const piece = board[r][c];
       if (piece) {
         const span = document.createElement("span");
         span.textContent = piece.slice(1);      // "s歩" → "歩"
-        if (piece[0] === "g") span.className = "gote";  // 後手の駒は 180 度回転
+        if (piece[0] === "g") span.classList.add("gote");        // 後手の駒は 180 度回転
+        if ("と杏圭全馬竜".includes(piece.slice(1))) span.classList.add("promoted");  // 成駒は赤
         cell.appendChild(span);
       }
       boardEl.appendChild(cell);
@@ -129,21 +207,39 @@ function render() {
 // クリック係: 「選択中かどうか」の 2 状態を行き来する
 function onCellClick(r, c) {
   if (selected === null) {
-    // 手番側の駒だけ選択できる
-    if (board[r][c] !== "" && board[r][c][0] === turn) selected = { r, c };
+    // 手番側の駒だけ選択できる。選んだ瞬間に行けるマスを計算しておく
+    if (board[r][c] !== "" && board[r][c][0] === turn) {
+      selected = { r, c };
+      legal = legalMoves(r, c);
+    }
   } else if (selected.r === r && selected.c === c) {
-    selected = null;                               // 同じマスをもう一回 → 選択解除
+    selected = null; legal = [];                   // 同じマスをもう一回 → 選択解除
   } else if (board[r][c] !== "" && board[r][c][0] === turn) {
-    selected = { r, c };                           // 自分の別の駒をクリック → 選び直し (味方は取れない)
-  } else {
+    selected = { r, c };                           // 自分の別の駒をクリック → 選び直し
+    legal = legalMoves(r, c);
+  } else if (legal.some(([lr, lc]) => lr === r && lc === c)) {
+    // 行けるマスに入っている時だけ動ける (設計会議の表が門番)
     const piece = board[selected.r][selected.c];
-    // 棋譜に 1 手追記: 例 "☗７六歩" (筋 = FILES[c]、段 = RANKS[r])
-    moves.push((piece[0] === "s" ? "☗" : "☖") + FILES[c] + RANKS[r] + piece.slice(1));
-    board[r][c] = piece;                           // 行き先に置く (相手の駒は上書き = 取り)
+    const owner = piece[0];
+    let kind = piece.slice(1);
+    let suffix = "";
+    // 成り判定: 成れる駒で、出発点か到達点が敵陣 3 段なら
+    if (PROMOTE[kind] && (inZone(owner, selected.r) || inZone(owner, r))) {
+      if (mustPromote(kind, owner, r) || confirm(kind + " — 成りますか？")) {
+        kind = PROMOTE[kind];
+        suffix = "成";
+      } else {
+        suffix = "不成";
+      }
+    }
+    // 棋譜に 1 手追記: 例 "☗２三歩成" (符号は元の駒名 + 成/不成)
+    moves.push((owner === "s" ? "☗" : "☖") + FILES[c] + RANKS[r] + piece.slice(1) + suffix);
+    board[r][c] = owner + kind;                    // 行き先に置く (相手の駒は上書き = 取り)
     board[selected.r][selected.c] = "";            // 元のマスを空に
-    selected = null;
+    selected = null; legal = [];
     turn = turn === "s" ? "g" : "s";               // 手番交代
   }
+  // 行けないマスをクリックした時は何も起きない (選択は維持)
   render();   // データを変えたら描き直す — 「データが本体」の設計の御利益
 }
 
@@ -168,6 +264,7 @@ async function saveGame(winner) {
   moves = [];
   turn = "s";
   selected = null;
+  legal = [];
   render();
 }
 
