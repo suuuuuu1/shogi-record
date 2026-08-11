@@ -30,13 +30,14 @@
           user-select: none;
         }
         .gote { transform: rotate(180deg); }
+        .cell.selected { background: #f8e28a; }
         #note { color: #8a7a66; font-size: 13px; margin-top: 12px; }
     </style>
 </head>
 <body>
-<h1>将棋盤 v0.1 — Phase 6</h1>
+<h1>将棋盤 v0.2 — Phase 7</h1>
 <div id="board"></div>
-<p id="note">盤面はデータ (board 配列)、画面はその写し (render)。駒を動かすのは Phase 7 で。</p>
+<p id="note">駒をクリックで選択 → 行き先をクリックで移動。相手の駒の上に動くと取り (上書き)。</p>
 <script>
     // 盤面の「本体」はこの配列。s = 先手 (下)、g = 後手 (上)、"" = 空きマス
     let board = [
@@ -53,6 +54,8 @@
 
     const boardEl = document.getElementById("board");
 
+    let selected = null;   // 選択中のマス {r, c}。何も選んでなければ null
+
     // board 配列の中身を、画面のマス目に描き写す係
     function render() {
       boardEl.innerHTML = "";
@@ -60,6 +63,8 @@
         for (let c = 0; c < 9; c++) {
           const cell = document.createElement("div");
           cell.className = "cell";
+          if (selected && selected.r === r && selected.c === c) cell.classList.add("selected");
+          cell.onclick = () => onCellClick(r, c);
           const piece = board[r][c];
           if (piece) {
             const span = document.createElement("span");
@@ -70,6 +75,20 @@
           boardEl.appendChild(cell);
         }
       }
+    }
+
+    // クリック係: 「選択中かどうか」の 2 状態を行き来する
+    function onCellClick(r, c) {
+      if (selected === null) {
+        if (board[r][c] !== "") selected = { r, c };   // 駒のあるマスなら選択
+      } else if (selected.r === r && selected.c === c) {
+        selected = null;                               // 同じマスをもう一回 → 選択解除
+      } else {
+        board[r][c] = board[selected.r][selected.c];   // 行き先に置く (相手の駒は上書き = 取り)
+        board[selected.r][selected.c] = "";            // 元のマスを空に
+        selected = null;
+      }
+      render();   // データを変えたら描き直す — 「データが本体」の設計の御利益
     }
 
     render();
