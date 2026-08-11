@@ -1,97 +1,133 @@
 <!DOCTYPE html>
 <html lang="ja">
 <head>
-    <meta charset="UTF-8">
-    <title>将棋盤 v0.1</title>
-    <style>
-        body {
-          font-family: "Hiragino Sans", "Yu Gothic", sans-serif;
-          background: #f5f0e6;
-          display: flex;
-          flex-direction: column;
-          align-items: center;
-          margin-top: 24px;
-        }
-        h1 { font-size: 20px; color: #5a4632; }
-        #board {
-          display: grid;
-          grid-template-columns: repeat(9, 52px);
-          grid-template-rows: repeat(9, 56px);
-          background: #e8b95c;
-          border: 3px solid #5a4632;
-        }
-        .cell {
-          border: 1px solid #7a5c3a;
-          display: flex;
-          align-items: center;
-          justify-content: center;
-          font-size: 30px;
-          cursor: pointer;
-          user-select: none;
-        }
-        .gote { transform: rotate(180deg); }
-        .cell.selected { background: #f8e28a; }
-        #note { color: #8a7a66; font-size: 13px; margin-top: 12px; }
-    </style>
+<meta charset="UTF-8">
+<title>将棋盤 v0.1</title>
+<style>
+  body {
+    font-family: "Hiragino Sans", "Yu Gothic", sans-serif;
+    background: #f5f0e6;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    margin-top: 24px;
+  }
+  h1 { font-size: 20px; color: #5a4632; }
+  #turn { font-size: 16px; font-weight: bold; color: #5a4632; margin: 4px 0 10px; }
+  #board {
+    display: grid;
+    grid-template-columns: repeat(9, 52px);
+    grid-template-rows: repeat(9, 56px);
+    background: #e8b95c;
+    border: 3px solid #5a4632;
+  }
+  .cell {
+    border: 1px solid #7a5c3a;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 30px;
+    cursor: pointer;
+    user-select: none;
+  }
+  .gote { transform: rotate(180deg); }
+  .cell.selected { background: #f8e28a; }
+  #main { display: flex; gap: 24px; align-items: flex-start; }
+  #kifu {
+    width: 170px;
+    height: 512px;
+    overflow-y: auto;
+    background: #fffdf5;
+    border: 2px solid #5a4632;
+    padding: 10px 14px;
+    font-size: 15px;
+    line-height: 1.9;
+  }
+  #kifu h2 { font-size: 15px; margin: 0 0 6px; color: #5a4632; }
+  #note { color: #8a7a66; font-size: 13px; margin-top: 12px; }
+</style>
 </head>
 <body>
-<h1>将棋盤 v0.2 — Phase 7</h1>
-<div id="board"></div>
-<p id="note">駒をクリックで選択 → 行き先をクリックで移動。相手の駒の上に動くと取り (上書き)。</p>
+<h1>将棋盤 v0.4 — Phase 8 前編</h1>
+<p id="turn">☗ 先手番</p>
+<div id="main">
+  <div id="board"></div>
+  <div id="kifu"><h2>棋譜</h2><div id="kifu-list"></div></div>
+</div>
+<p id="note">指した手が右の棋譜に育っていく。これを DB に保存するのが Phase 8 後編。</p>
 <script>
-    // 盤面の「本体」はこの配列。s = 先手 (下)、g = 後手 (上)、"" = 空きマス
-    let board = [
-      ["g香","g桂","g銀","g金","g玉","g金","g銀","g桂","g香"],
-      ["",  "g飛","",  "",  "",  "",  "",  "g角",""  ],
-      ["g歩","g歩","g歩","g歩","g歩","g歩","g歩","g歩","g歩"],
-      ["",  "",  "",  "",  "",  "",  "",  "",  ""  ],
-      ["",  "",  "",  "",  "",  "",  "",  "",  ""  ],
-      ["",  "",  "",  "",  "",  "",  "",  "",  ""  ],
-      ["s歩","s歩","s歩","s歩","s歩","s歩","s歩","s歩","s歩"],
-      ["",  "s角","",  "",  "",  "",  "",  "s飛",""  ],
-      ["s香","s桂","s銀","s金","s王","s金","s銀","s桂","s香"],
-    ];
+// 盤面の「本体」はこの配列。s = 先手 (下)、g = 後手 (上)、"" = 空きマス
+let board = [
+  ["g香","g桂","g銀","g金","g玉","g金","g銀","g桂","g香"],
+  ["",  "g飛","",  "",  "",  "",  "",  "g角",""  ],
+  ["g歩","g歩","g歩","g歩","g歩","g歩","g歩","g歩","g歩"],
+  ["",  "",  "",  "",  "",  "",  "",  "",  ""  ],
+  ["",  "",  "",  "",  "",  "",  "",  "",  ""  ],
+  ["",  "",  "",  "",  "",  "",  "",  "",  ""  ],
+  ["s歩","s歩","s歩","s歩","s歩","s歩","s歩","s歩","s歩"],
+  ["",  "s角","",  "",  "",  "",  "",  "s飛",""  ],
+  ["s香","s桂","s銀","s金","s王","s金","s銀","s桂","s香"],
+];
 
-    const boardEl = document.getElementById("board");
+const boardEl = document.getElementById("board");
 
-    let selected = null;   // 選択中のマス {r, c}。何も選んでなければ null
+let selected = null;   // 選択中のマス {r, c}。何も選んでなければ null
+let turn = "s";        // 手番。s = 先手、g = 後手
+let moves = [];        // 棋譜の本体 = 指した手の列。「対局を保存する」= この配列を保存すること
 
-    // board 配列の中身を、画面のマス目に描き写す係
-    function render() {
-      boardEl.innerHTML = "";
-      for (let r = 0; r < 9; r++) {
-        for (let c = 0; c < 9; c++) {
-          const cell = document.createElement("div");
-          cell.className = "cell";
-          if (selected && selected.r === r && selected.c === c) cell.classList.add("selected");
-          cell.onclick = () => onCellClick(r, c);
-          const piece = board[r][c];
-          if (piece) {
-            const span = document.createElement("span");
-            span.textContent = piece.slice(1);      // "s歩" → "歩"
-            if (piece[0] === "g") span.className = "gote";  // 後手の駒は 180 度回転
-            cell.appendChild(span);
-          }
-          boardEl.appendChild(cell);
-        }
+const turnEl = document.getElementById("turn");
+const kifuEl = document.getElementById("kifu-list");
+
+// 将棋の座標: 筋は右から９８７…、段は上から一二三…
+const FILES = ["９","８","７","６","５","４","３","２","１"];
+const RANKS = ["一","二","三","四","五","六","七","八","九"];
+
+// board 配列の中身を、画面のマス目に描き写す係
+function render() {
+  turnEl.textContent = turn === "s" ? "☗ 先手番" : "☖ 後手番";
+  kifuEl.innerHTML = moves.map((m, i) => (i + 1) + ". " + m).join("<br>");
+  kifuEl.parentElement.scrollTop = kifuEl.parentElement.scrollHeight;  // 常に最新の手を表示
+  boardEl.innerHTML = "";
+  for (let r = 0; r < 9; r++) {
+    for (let c = 0; c < 9; c++) {
+      const cell = document.createElement("div");
+      cell.className = "cell";
+      if (selected && selected.r === r && selected.c === c) cell.classList.add("selected");
+      cell.onclick = () => onCellClick(r, c);
+      const piece = board[r][c];
+      if (piece) {
+        const span = document.createElement("span");
+        span.textContent = piece.slice(1);      // "s歩" → "歩"
+        if (piece[0] === "g") span.className = "gote";  // 後手の駒は 180 度回転
+        cell.appendChild(span);
       }
+      boardEl.appendChild(cell);
     }
+  }
+}
 
-    // クリック係: 「選択中かどうか」の 2 状態を行き来する
-    function onCellClick(r, c) {
-      if (selected === null) {
-        if (board[r][c] !== "") selected = { r, c };   // 駒のあるマスなら選択
-      } else if (selected.r === r && selected.c === c) {
-        selected = null;                               // 同じマスをもう一回 → 選択解除
-      } else {
-        board[r][c] = board[selected.r][selected.c];   // 行き先に置く (相手の駒は上書き = 取り)
-        board[selected.r][selected.c] = "";            // 元のマスを空に
-        selected = null;
-      }
-      render();   // データを変えたら描き直す — 「データが本体」の設計の御利益
-    }
+// クリック係: 「選択中かどうか」の 2 状態を行き来する
+function onCellClick(r, c) {
+  if (selected === null) {
+    // 手番側の駒だけ選択できる
+    if (board[r][c] !== "" && board[r][c][0] === turn) selected = { r, c };
+  } else if (selected.r === r && selected.c === c) {
+    selected = null;                               // 同じマスをもう一回 → 選択解除
+  } else if (board[r][c] !== "" && board[r][c][0] === turn) {
+    selected = { r, c };                           // 自分の別の駒をクリック → 選び直し (味方は取れない)
+  } else {
+    const piece = board[selected.r][selected.c];
+    // 棋譜に 1 手追記: 例 "☗７六歩" (筋 = FILES[c]、段 = RANKS[r])
+    moves.push((piece[0] === "s" ? "☗" : "☖") + FILES[c] + RANKS[r] + piece.slice(1));
+    board[r][c] = piece;                           // 行き先に置く (相手の駒は上書き = 取り)
+    board[selected.r][selected.c] = "";            // 元のマスを空に
+    selected = null;
+    turn = turn === "s" ? "g" : "s";               // 手番交代
+  }
+  render();   // データを変えたら描き直す — 「データが本体」の設計の御利益
+}
 
-    render();
+render();
 </script>
 </body>
 </html>

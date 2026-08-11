@@ -14,6 +14,8 @@ data class ShogiRecord(
     val moves: Int
 )
 
+data class GameRequest(val winner: String, val kifu: String)
+
 @RestController
 class RecordController(private val jdbc: JdbcTemplate) {
 
@@ -40,6 +42,10 @@ class RecordController(private val jdbc: JdbcTemplate) {
         else ResponseEntity.notFound().build()
     }
 
+    @GetMapping("/games")
+    fun getGames():List<Map<String, Any?>> =
+        jdbc.queryForList("SELECT * FROM games ORDER BY id DESC", )
+
     @PostMapping("/records")
     fun add(@RequestBody record: ShogiRecord): ShogiRecord {
         val newId = jdbc.queryForObject(
@@ -48,6 +54,14 @@ class RecordController(private val jdbc: JdbcTemplate) {
             record.date, record.result, record.side, record.opening, record.moves
         )
         return record.copy(id = newId ?: 0)
+    }
+    @PostMapping("/games")
+    fun addGame(@RequestBody game: GameRequest): GameRequest {
+        jdbc.update(
+            "INSERT INTO games (winner, kifu) VALUES (?, ?)",
+            game.winner, game.kifu
+        )
+        return game
     }
 
     @PutMapping("/records/{id}")
@@ -77,4 +91,7 @@ class RecordController(private val jdbc: JdbcTemplate) {
         GROUP BY opening
         ORDER BY games DESC
     """.trimIndent())
+
+
+
 }

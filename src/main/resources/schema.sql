@@ -5,4 +5,11 @@ CREATE TABLE IF NOT EXISTS records (
     side VARCHAR(10) NOT NULL,
     opening VARCHAR(50) NOT NULL,
     moves INT NOT NULL
+
     );
+
+CREATE TABLE IF NOT EXISTS games(
+    id SERIAL PRIMARY KEY,
+    winner VARCHAR(10),
+    kifu TEXT
+);
