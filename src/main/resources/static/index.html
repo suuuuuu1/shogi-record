@@ -13,7 +13,8 @@
     margin-top: 24px;
   }
   h1 { font-size: 20px; color: #5a4632; }
-  #turn { font-size: 16px; font-weight: bold; color: #5a4632; margin: 4px 0 10px; }
+  #turn { font-size: 16px; font-weight: bold; color: #5a4632; margin: 4px 0 2px; }
+  #ws-status { font-size: 12px; color: #8a7a66; margin: 0 0 8px; }
   #board {
     display: grid;
     grid-template-columns: repeat(9, 52px);
@@ -85,8 +86,9 @@
 </style>
 </head>
 <body>
-<h1>将棋盤 v0.10 — 王手・詰み</h1>
+<h1>将棋盤 v0.11 — 通信対局</h1>
 <p id="turn">☗ 先手番</p>
+<p id="ws-status">⚪ 通信: 未接続</p>
 <div id="main">
   <div id="board-col">
     <div id="hand-g" class="hand"></div>
@@ -104,10 +106,10 @@
   <select id="game-select"></select>
   <button onclick="replayStep(-1)">◀ 戻る</button>
   <button onclick="replayStep(1)">進む ▶</button>
-  <button onclick="exitReplay()">新しい対局へ</button>
+  <button onclick="newGameClick()">新しい対局へ</button>
 </div>
 <p id="status"></p>
-<p id="note">王手中は解除する手しか光らない (表示はしない主義)。詰んだら勝敗表示。打ち歩詰めも反則として除外される。</p>
+<p id="note">2 つの画面で開くと、指した手がリアルタイムに相手の盤へ届く (v1: 両方とも初期配置から始めること)。</p>
 <script>
 // 盤面の「本体」はこの配列。s = 先手 (下)、g = 後手 (上)、"" = 空きマス
 const INITIAL_BOARD = [
@@ -140,6 +142,7 @@ const kifuEl = document.getElementById("kifu-list");
 const statusEl = document.getElementById("status");
 const handGEl = document.getElementById("hand-g");
 const handSEl = document.getElementById("hand-s");
+const wsStatusEl = document.getElementById("ws-status");
 
 // 将棋の座標: 筋は右から９８７…、段は上から一二三…
 const FILES = ["９","８","７","６","５","４","３","２","１"];
@@ -379,6 +382,7 @@ function onCellClick(r, c) {
         text: (owner === "s" ? "☗" : "☖") + FILES[c] + RANKS[r] + kind + "打",
         drop: true, from: null, to: [r, c], piece: owner + kind,
       });
+      broadcast({ type: "move", move: moves[moves.length - 1] });
       selectedHand = null; legal = [];
       turn = turn === "s" ? "g" : "s";
       checkGameEnd();
@@ -426,6 +430,7 @@ function onCellClick(r, c) {
       text: (owner === "s" ? "☗" : "☖") + sq + piece.slice(1) + suffix,
       drop: false, from: [selected.r, selected.c], to: [r, c], piece: owner + kind,
     });
+    broadcast({ type: "move", move: moves[moves.length - 1] });
     board[r][c] = owner + kind;                    // 行き先に置く
     board[selected.r][selected.c] = "";            // 元のマスを空に
     selected = null; legal = [];
@@ -467,6 +472,21 @@ async function saveGame(winner) {
   hands = { s: [], g: [] };
   gameOver = false;
   render();
+}
+
+// 1 手ぶんの生データ (from/to/piece/drop) を盤と駒台に適用する — 再生と通信対局の共通部品
+function applyMove(m) {
+  if (m.drop) {
+    board[m.to[0]][m.to[1]] = m.piece;
+    const arr = hands[m.piece[0]];
+    const idx = arr.indexOf(m.piece.slice(1));
+    if (idx >= 0) arr.splice(idx, 1);
+  } else {
+    const target = board[m.to[0]][m.to[1]];
+    if (target !== "") hands[m.piece[0]].push(DEMOTE[target.slice(1)] || target.slice(1));
+    board[m.to[0]][m.to[1]] = m.piece;
+    board[m.from[0]][m.from[1]] = "";
+  }
 }
 
 // ===== 棋譜再生 =====
@@ -511,20 +531,7 @@ function showReplay() {
   board = structuredClone(INITIAL_BOARD);
   hands = { s: [], g: [] };
   selected = null; selectedHand = null; legal = [];
-  for (let i = 0; i < replay.n; i++) {
-    const m = replay.data[i];
-    if (m.drop) {
-      board[m.to[0]][m.to[1]] = m.piece;
-      const arr = hands[m.piece[0]];
-      const idx = arr.indexOf(m.piece.slice(1));
-      if (idx >= 0) arr.splice(idx, 1);
-    } else {
-      const target = board[m.to[0]][m.to[1]];
-      if (target !== "") hands[m.piece[0]].push(DEMOTE[target.slice(1)] || target.slice(1));
-      board[m.to[0]][m.to[1]] = m.piece;
-      board[m.from[0]][m.from[1]] = "";
-    }
-  }
+  for (let i = 0; i < replay.n; i++) applyMove(replay.data[i]);
   moves = replay.data.slice(0, replay.n);   // 棋譜欄も n 手目まで追従
   turn = replay.n % 2 === 0 ? "s" : "g";
   statusEl.textContent = "再生中 📖 " + replay.n + " / " + replay.data.length + " 手";
@@ -542,6 +549,44 @@ function exitReplay() {
   render();
 }
 
+// ===== 通信対局 (WebSocket = つなぎっぱなしの電話回線) =====
+let ws = null;
+
+function broadcast(msg) {
+  if (ws && ws.readyState === 1) ws.send(JSON.stringify(msg));
+}
+
+function connectWS() {
+  ws = new WebSocket((location.protocol === "https:" ? "wss://" : "ws://") + location.host + "/ws");
+  ws.onopen = () => { wsStatusEl.textContent = "🟢 通信: 接続中 (指した手が相手にも届く)"; };
+  ws.onclose = () => {
+    wsStatusEl.textContent = "⚪ 通信: 切断 — 再接続を試みてる…";
+    setTimeout(connectWS, 2000);   // 自動でかけ直す
+  };
+  ws.onmessage = (e) => {
+    const msg = JSON.parse(e.data);
+    if (msg.type === "move") {
+      if (replay) return;          // 再生中に届いた手は無視 (v1 の割り切り)
+      applyMove(msg.move);         // 再生と同じ共通部品で盤に反映
+      moves.push(msg.move);
+      turn = turn === "s" ? "g" : "s";
+      selected = null; selectedHand = null; legal = [];
+      checkGameEnd();
+      render();
+    } else if (msg.type === "reset") {
+      exitReplay();
+      statusEl.textContent = "相手が新しい対局を始めたよ";
+    }
+  };
+}
+
+// 「新しい対局へ」ボタン: 自分をリセットして、相手にも知らせる
+function newGameClick() {
+  exitReplay();
+  broadcast({ type: "reset" });
+}
+
+connectWS();
 render();
 </script>
 </body>
