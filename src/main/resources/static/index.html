@@ -14,7 +14,17 @@
   }
   h1 { font-size: 20px; color: #5a4632; }
   #turn { font-size: 16px; font-weight: bold; color: #5a4632; margin: 4px 0 2px; }
-  #ws-status { font-size: 12px; color: #8a7a66; margin: 0 0 8px; }
+  #ws-status { font-size: 12px; color: #8a7a66; margin: 0 0 4px; }
+  #room-bar { display: flex; gap: 6px; margin: 0 0 10px; }
+  #room-bar input {
+    font-size: 13px; padding: 5px 8px;
+    border: 2px solid #5a4632; border-radius: 6px; background: #fffdf5;
+  }
+  #room-bar button {
+    font-size: 13px; padding: 5px 10px; cursor: pointer;
+    border: 2px solid #5a4632; border-radius: 6px; background: #fffdf5; color: #5a4632;
+  }
+  #room-bar button:hover { background: #f8e28a; }
   #board {
     display: grid;
     grid-template-columns: repeat(9, 52px);
@@ -86,9 +96,13 @@
 </style>
 </head>
 <body>
-<h1>将棋盤 v0.12 — 1 vs 1</h1>
+<h1>将棋盤 v0.13 — 対局室</h1>
 <p id="turn">☗ 先手番</p>
 <p id="ws-status">⚪ 通信: 未接続</p>
+<div id="room-bar">
+  <input id="room-input" placeholder="部屋の名前 (例: kyota-room)">
+  <button onclick="joinRoom()">この部屋へ移動</button>
+</div>
 <div id="main">
   <div id="board-col">
     <div id="hand-g" class="hand"></div>
@@ -109,7 +123,7 @@
   <button onclick="newGameClick()">新しい対局へ</button>
 </div>
 <p id="status"></p>
-<p id="note">先着 1 人目が ☗ 先手、2 人目が ☖ 後手、3 人目からは観戦。自分の手番の自分の駒しか動かせない。</p>
+<p id="note">部屋ごとに独立した対局室。URL の ?room=名前 を共有すれば同じ部屋に入れる。部屋の先着 2 人が対局者、以降は観戦。</p>
 <script>
 // 盤面の「本体」はこの配列。s = 先手 (下)、g = 後手 (上)、"" = 空きマス
 const INITIAL_BOARD = [
@@ -555,6 +569,17 @@ function exitReplay() {
 }
 
 // ===== 通信対局 (WebSocket = つなぎっぱなしの電話回線) =====
+// 部屋の名前は URL の ?room= から。無ければ "lobby"
+const ROOM = new URLSearchParams(location.search).get("room") || "lobby";
+
+function joinRoom() {
+  const name = document.getElementById("room-input").value.trim();
+  if (name) location.href = "?room=" + encodeURIComponent(name);   // ページごと部屋に引っ越す
+}
+document.getElementById("room-input").addEventListener("keydown", (e) => {
+  if (e.key === "Enter") joinRoom();
+});
+
 let ws = null;
 
 function broadcast(msg) {
@@ -562,8 +587,8 @@ function broadcast(msg) {
 }
 
 function connectWS() {
-  ws = new WebSocket((location.protocol === "https:" ? "wss://" : "ws://") + location.host + "/ws");
-  ws.onopen = () => { wsStatusEl.textContent = "🟢 通信: 接続中 (指した手が相手にも届く)"; };
+  ws = new WebSocket((location.protocol === "https:" ? "wss://" : "ws://") + location.host + "/ws?room=" + encodeURIComponent(ROOM));
+  ws.onopen = () => { wsStatusEl.textContent = "🟢 「" + ROOM + "」の部屋に接続中"; };
   ws.onclose = () => {
     wsStatusEl.textContent = "⚪ 通信: 切断 — 再接続を試みてる…";
     setTimeout(connectWS, 2000);   // 自動でかけ直す
@@ -584,7 +609,7 @@ function connectWS() {
     } else if (msg.type === "role") {
       myRole = msg.role;
       const label = myRole === "s" ? "☗ 先手" : myRole === "g" ? "☖ 後手" : "👀 観戦";
-      wsStatusEl.textContent = "🟢 接続中 — あなた: " + label;
+      wsStatusEl.textContent = "🟢 「" + ROOM + "」の部屋 — あなた: " + label;
     }
   };
 }

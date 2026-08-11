@@ -9,41 +9,56 @@ import org.springframework.web.socket.config.annotation.EnableWebSocket
 import org.springframework.web.socket.config.annotation.WebSocketConfigurer
 import org.springframework.web.socket.config.annotation.WebSocketHandlerRegistry
 import org.springframework.web.socket.handler.TextWebSocketHandler
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.CopyOnWriteArrayList
 
-// 中継局 + 座席係: 先着 1 人目 = 先手、2 人目 = 後手、3 人目以降 = 観戦
+// 中継局 + 座席係 + 部屋係: 部屋ごとに独立した対局室 (先着 = 先手、2 人目 = 後手、以降 = 観戦)
 @Component
 class GameSocketHandler : TextWebSocketHandler() {
 
-    // つながっている電話回線 (セッション) の一覧
-    private val sessions = CopyOnWriteArrayList<WebSocketSession>()
+    // 1 部屋ぶんの状態: つながってる回線と座席
+    class Room {
+        val sessions = CopyOnWriteArrayList<WebSocketSession>()
+        var sente: WebSocketSession? = null
+        var gote: WebSocketSession? = null
+    }
 
-    // 座席。空席なら null
-    private var sente: WebSocketSession? = null
-    private var gote: WebSocketSession? = null
+    // 部屋の一覧 (部屋名 → Room)。無い部屋は入った瞬間に作られる
+    private val rooms = ConcurrentHashMap<String, Room>()
+
+    // 接続 URL (/ws?room=名前) から部屋名を取り出す。無指定は "lobby"
+    private fun roomName(session: WebSocketSession): String {
+        val q = session.uri?.query ?: return "lobby"
+        return q.split("&").firstOrNull { it.startsWith("room=") }
+            ?.substringAfter("=")?.ifBlank { null } ?: "lobby"
+    }
 
     @Synchronized
     override fun afterConnectionEstablished(session: WebSocketSession) {
-        sessions.add(session)
+        val room = rooms.getOrPut(roomName(session)) { Room() }
+        room.sessions.add(session)
         val role = when {
-            sente == null -> { sente = session; "s" }     // 先着 → 先手の席へ
-            gote == null  -> { gote = session; "g" }      // 2 人目 → 後手の席へ
-            else -> "spec"                                 // 満席 → 観戦席
+            room.sente == null -> { room.sente = session; "s" }
+            room.gote == null  -> { room.gote = session; "g" }
+            else -> "spec"
         }
-        // 座った本人にだけ「あなたの役割」を通知
         session.sendMessage(TextMessage("""{"type":"role","role":"$role"}"""))
     }
 
     @Synchronized
     override fun afterConnectionClosed(session: WebSocketSession, status: CloseStatus) {
-        sessions.remove(session)
-        if (sente === session) sente = null   // 席を空ける (次に来た人が座れる)
-        if (gote === session) gote = null
+        val name = roomName(session)
+        val room = rooms[name] ?: return
+        room.sessions.remove(session)
+        if (room.sente === session) room.sente = null
+        if (room.gote === session) room.gote = null
+        if (room.sessions.isEmpty()) rooms.remove(name)   // 誰もいなくなった部屋は畳む
     }
 
     override fun handleTextMessage(session: WebSocketSession, message: TextMessage) {
-        for (s in sessions) {
-            if (s !== session && s.isOpen) s.sendMessage(message)
+        val room = rooms[roomName(session)] ?: return
+        for (s in room.sessions) {
+            if (s !== session && s.isOpen) s.sendMessage(message)   // 同じ部屋の人にだけ転送
         }
     }
 }
