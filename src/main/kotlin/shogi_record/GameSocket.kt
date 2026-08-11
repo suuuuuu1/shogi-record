@@ -38,6 +38,6 @@ class GameSocketHandler : TextWebSocketHandler() {
 @EnableWebSocket
 class WebSocketConfig(private val handler: GameSocketHandler) : WebSocketConfigurer {
     override fun registerWebSocketHandlers(registry: WebSocketHandlerRegistry) {
-        registry.addHandler(handler, "/ws")
+        registry.addHandler(handler, "/ws").setAllowedOrigins("*")
     }
 }
