@@ -14,7 +14,7 @@ data class ShogiRecord(
     val moves: Int
 )
 
-data class GameRequest(val winner: String, val kifu: String)
+data class GameRequest(val winner: String, val kifu: String , val data : String)
 
 @RestController
 class RecordController(private val jdbc: JdbcTemplate) {
@@ -58,8 +58,8 @@ class RecordController(private val jdbc: JdbcTemplate) {
     @PostMapping("/games")
     fun addGame(@RequestBody game: GameRequest): GameRequest {
         jdbc.update(
-            "INSERT INTO games (winner, kifu) VALUES (?, ?)",
-            game.winner, game.kifu
+            "INSERT INTO games (winner, kifu, data) VALUES (?, ?, ?)",
+            game.winner, game.kifu, game.data
         )
         return game
     }

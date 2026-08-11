@@ -59,6 +59,17 @@
   }
   #kifu h2 { font-size: 15px; margin: 0 0 6px; color: #5a4632; }
   #controls { margin-top: 14px; display: flex; gap: 12px; }
+  #controls2 { margin-top: 8px; display: flex; gap: 8px; align-items: center; }
+  #controls2 button, #controls2 select {
+    font-size: 13px;
+    padding: 6px 10px;
+    border: 2px solid #5a4632;
+    border-radius: 6px;
+    background: #fffdf5;
+    color: #5a4632;
+    cursor: pointer;
+  }
+  #controls2 button:hover { background: #f8e28a; }
   #controls button {
     font-size: 15px;
     padding: 8px 16px;
@@ -74,7 +85,7 @@
 </style>
 </head>
 <body>
-<h1>将棋盤 v0.8 — Phase 9C 駒台と打ち</h1>
+<h1>将棋盤 v0.10 — 王手・詰み</h1>
 <p id="turn">☗ 先手番</p>
 <div id="main">
   <div id="board-col">
@@ -88,8 +99,15 @@
   <button onclick="saveGame('sente')">☗ 先手勝ちで保存</button>
   <button onclick="saveGame('gote')">☖ 後手勝ちで保存</button>
 </div>
+<div id="controls2">
+  <button onclick="loadGames()">📖 保存対局を見る</button>
+  <select id="game-select"></select>
+  <button onclick="replayStep(-1)">◀ 戻る</button>
+  <button onclick="replayStep(1)">進む ▶</button>
+  <button onclick="exitReplay()">新しい対局へ</button>
+</div>
 <p id="status"></p>
-<p id="note">取った駒は駒台へ (成駒は元の姿に戻る)。駒台の駒をクリック → 緑のマスに打てる。二歩と行き所のない打ちは自動で禁止。</p>
+<p id="note">王手中は解除する手しか光らない (表示はしない主義)。詰んだら勝敗表示。打ち歩詰めも反則として除外される。</p>
 <script>
 // 盤面の「本体」はこの配列。s = 先手 (下)、g = 後手 (上)、"" = 空きマス
 const INITIAL_BOARD = [
@@ -112,6 +130,8 @@ let selected = null;     // 選択中のマス {r, c}。何も選んでなけれ
 let selectedHand = null; // 選択中の持ち駒 {owner, kind}。打つモードの時だけ入る
 let legal = [];          // 選択中の駒が行けるマス (打つ時は打てるマス) の一覧
 let hands = { s: [], g: [] };   // 駒台。取った駒の種類が並ぶ
+let replay = null;              // 再生モード {data, n}。通常対局中は null
+let gameOver = false;           // 詰みで対局終了したら true (保存かリセットで解除)
 let turn = "s";        // 手番。s = 先手、g = 後手
 let moves = [];        // 棋譜の本体 = 指した手の列。「対局を保存する」= この配列を保存すること
 
@@ -220,15 +240,85 @@ function dropTargets(owner, kind) {
   return result;
 }
 
+// ===== 王手・詰み (Q8 の答え: 相手の全駒の行き先に、自分の王のマスが入っているか) =====
+function findKing(owner) {
+  for (let r = 0; r < 9; r++) for (let c = 0; c < 9; c++) {
+    const p = board[r][c];
+    if (p !== "" && p[0] === owner && (p.slice(1) === "王" || p.slice(1) === "玉")) return [r, c];
+  }
+  return null;
+}
+
+function inCheck(owner) {
+  const king = findKing(owner);
+  if (!king) return false;
+  const enemy = owner === "s" ? "g" : "s";
+  for (let r = 0; r < 9; r++) for (let c = 0; c < 9; c++) {
+    const p = board[r][c];
+    if (p !== "" && p[0] === enemy) {
+      if (legalMoves(r, c).some(([tr, tc]) => tr === king[0] && tc === king[1])) return true;
+    }
+  }
+  return false;
+}
+
+// 自殺手の除外: 試しに指してみて→自分の王が王手なら却下→盤を元に戻す
+function legalMovesSafe(r, c) {
+  const piece = board[r][c];
+  return legalMoves(r, c).filter(([tr, tc]) => {
+    const captured = board[tr][tc];
+    board[tr][tc] = piece; board[r][c] = "";       // 試しに指す
+    const bad = inCheck(piece[0]);
+    board[r][c] = piece; board[tr][tc] = captured; // 待った (シミュレーションだから合法)
+    return !bad;
+  });
+}
+
+// 打ちも同じ + 打ち歩詰めチェック (歩を打った結果、相手が詰んでいたら反則)
+function dropTargetsSafe(owner, kind, checkUchifuzume = true) {
+  return dropTargets(owner, kind).filter(([tr, tc]) => {
+    board[tr][tc] = owner + kind;                  // 試しに打つ
+    let bad = inCheck(owner);
+    if (!bad && checkUchifuzume && kind === "歩") {
+      const enemy = owner === "s" ? "g" : "s";
+      if (inCheck(enemy) && !anyLegalMove(enemy, false)) bad = true;   // 打ち歩詰め！
+    }
+    board[tr][tc] = "";
+    return !bad;
+  });
+}
+
+// owner に指せる手が 1 つでも残っているか (盤上 + 持ち駒)。無ければ詰み
+function anyLegalMove(owner, checkUchifuzume = true) {
+  for (let r = 0; r < 9; r++) for (let c = 0; c < 9; c++) {
+    const p = board[r][c];
+    if (p !== "" && p[0] === owner && legalMovesSafe(r, c).length > 0) return true;
+  }
+  for (const kind of new Set(hands[owner])) {
+    if (dropTargetsSafe(owner, kind, checkUchifuzume).length > 0) return true;
+  }
+  return false;
+}
+
+// 手番が回ってきた側に合法手が無ければ対局終了
+function checkGameEnd() {
+  if (!anyLegalMove(turn)) {
+    gameOver = true;
+    const winnerName = turn === "s" ? "☖ 後手" : "☗ 先手";
+    statusEl.textContent = (inCheck(turn) ? "詰み！" : "手詰まり！") + " " + winnerName + "の勝ち 🏆 勝った側の保存ボタンで DB へ";
+  }
+}
+
 // 駒台クリック係
 function onHandClick(owner, kind) {
+  if (replay || gameOver) return;                // 再生中・終局後は触れない
   if (owner !== turn) return;                    // 手番側の駒台だけ触れる
   if (selectedHand && selectedHand.kind === kind) {
     selectedHand = null; legal = [];             // もう一回クリック → 解除
   } else {
     selectedHand = { owner, kind };
     selected = null;
-    legal = dropTargets(owner, kind);
+    legal = dropTargetsSafe(owner, kind);
   }
   render();
 }
@@ -251,7 +341,7 @@ function renderHand(el, owner) {
 // board 配列の中身を、画面のマス目に描き写す係
 function render() {
   turnEl.textContent = turn === "s" ? "☗ 先手番" : "☖ 後手番";
-  kifuEl.innerHTML = moves.map((m, i) => (i + 1) + ". " + m).join("<br>");
+  kifuEl.innerHTML = moves.map((m, i) => (i + 1) + ". " + m.text).join("<br>");
   kifuEl.parentElement.scrollTop = kifuEl.parentElement.scrollHeight;  // 常に最新の手を表示
   renderHand(handGEl, "g");
   renderHand(handSEl, "s");
@@ -278,31 +368,36 @@ function render() {
 
 // クリック係: 「選択中かどうか」の 2 状態を行き来する
 function onCellClick(r, c) {
+  if (replay || gameOver) return;          // 再生中・終局後は盤に触れない
   if (selectedHand !== null) {
     // 打つモード: 打てるマスなら打つ、自分の盤上の駒なら選択切り替え
     if (legal.some(([lr, lc]) => lr === r && lc === c)) {
       const owner = selectedHand.owner, kind = selectedHand.kind;
       board[r][c] = owner + kind;
       hands[owner].splice(hands[owner].indexOf(kind), 1);   // 駒台から 1 枚減らす
-      moves.push((owner === "s" ? "☗" : "☖") + FILES[c] + RANKS[r] + kind + "打");
+      moves.push({
+        text: (owner === "s" ? "☗" : "☖") + FILES[c] + RANKS[r] + kind + "打",
+        drop: true, from: null, to: [r, c], piece: owner + kind,
+      });
       selectedHand = null; legal = [];
       turn = turn === "s" ? "g" : "s";
+      checkGameEnd();
     } else if (board[r][c] !== "" && board[r][c][0] === turn) {
       selectedHand = null;
       selected = { r, c };
-      legal = legalMoves(r, c);
+      legal = legalMovesSafe(r, c);
     }
   } else if (selected === null) {
     // 手番側の駒だけ選択できる。選んだ瞬間に行けるマスを計算しておく
     if (board[r][c] !== "" && board[r][c][0] === turn) {
       selected = { r, c };
-      legal = legalMoves(r, c);
+      legal = legalMovesSafe(r, c);
     }
   } else if (selected.r === r && selected.c === c) {
     selected = null; legal = [];                   // 同じマスをもう一回 → 選択解除
   } else if (board[r][c] !== "" && board[r][c][0] === turn) {
     selected = { r, c };                           // 自分の別の駒をクリック → 選び直し
-    legal = legalMoves(r, c);
+    legal = legalMovesSafe(r, c);
   } else if (legal.some(([lr, lc]) => lr === r && lc === c)) {
     // 行けるマスに入っている時だけ動ける (設計会議の表が門番)
     const piece = board[selected.r][selected.c];
@@ -323,12 +418,19 @@ function onCellClick(r, c) {
       const capturedKind = board[r][c].slice(1);
       hands[owner].push(DEMOTE[capturedKind] || capturedKind);
     }
-    // 棋譜に 1 手追記: 例 "☗２三歩成" (符号は元の駒名 + 成/不成)
-    moves.push((owner === "s" ? "☗" : "☖") + FILES[c] + RANKS[r] + piece.slice(1) + suffix);
+    // 棋譜に 1 手追記。text = 人間用の表示、from/to/piece = 機械用の生データ (Q7 の答え)
+    // 直前の手と同じマスに動く時は「同」表記 (☗同歩)
+    const prev = moves[moves.length - 1];
+    const sq = (prev && prev.to[0] === r && prev.to[1] === c) ? "同" : FILES[c] + RANKS[r];
+    moves.push({
+      text: (owner === "s" ? "☗" : "☖") + sq + piece.slice(1) + suffix,
+      drop: false, from: [selected.r, selected.c], to: [r, c], piece: owner + kind,
+    });
     board[r][c] = owner + kind;                    // 行き先に置く
     board[selected.r][selected.c] = "";            // 元のマスを空に
     selected = null; legal = [];
     turn = turn === "s" ? "g" : "s";               // 手番交代
+    checkGameEnd();
   }
   // 行けないマスをクリックした時は何も起きない (選択は維持)
   render();   // データを変えたら描き直す — 「データが本体」の設計の御利益
@@ -336,6 +438,7 @@ function onCellClick(r, c) {
 
 // 保存係: moves を JSON にして自分の API (POST /games) へ送る
 async function saveGame(winner) {
+  if (replay) { statusEl.textContent = "再生中は保存できないよ"; return; }
   if (moves.length === 0) {
     statusEl.textContent = "まだ 1 手も指してないよ";
     return;
@@ -343,7 +446,11 @@ async function saveGame(winner) {
   const res = await fetch("/games", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ winner: winner, kifu: moves.join(" ") })
+    body: JSON.stringify({
+      winner: winner,
+      kifu: moves.map(m => m.text).join(" "),   // 人間用: 読める棋譜
+      data: JSON.stringify(moves)               // 機械用: ロスレスの生データ
+    })
   });
   if (!res.ok) {
     statusEl.textContent = "保存に失敗… (F12 でエラー確認)";
@@ -358,6 +465,80 @@ async function saveGame(winner) {
   selectedHand = null;
   legal = [];
   hands = { s: [], g: [] };
+  gameOver = false;
+  render();
+}
+
+// ===== 棋譜再生 =====
+// 保存対局の一覧を取ってきて選択メニューに並べる
+async function loadGames() {
+  if (!replay && moves.length > 0 && !confirm("指しかけの対局は消えるけど、見に行く？")) return;
+  const res = await fetch("/games");
+  const games = await res.json();
+  const sel = document.getElementById("game-select");
+  sel.innerHTML = "";
+  for (const g of games) {
+    if (!g.data) continue;   // 旧形式 (生データ無し) は再生できない
+    const opt = document.createElement("option");
+    opt.textContent = "#" + g.id + " " + (g.winner === "sente" ? "☗勝ち" : "☖勝ち") + " " + JSON.parse(g.data).length + "手";
+    opt.dataset.moves = g.data;
+    sel.appendChild(opt);
+  }
+  if (sel.options.length === 0) {
+    statusEl.textContent = "再生できる対局がまだ無いよ (この版で保存した対局から再生できる)";
+    return;
+  }
+  sel.onchange = startReplay;
+  startReplay();
+}
+
+function startReplay() {
+  const sel = document.getElementById("game-select");
+  const opt = sel.options[sel.selectedIndex];
+  if (!opt) return;
+  replay = { data: JSON.parse(opt.dataset.moves), n: 0 };
+  showReplay();
+}
+
+function replayStep(d) {
+  if (!replay) return;
+  replay.n = Math.max(0, Math.min(replay.data.length, replay.n + d));
+  showReplay();
+}
+
+// 初期配置から n 手目まで並べ直す (毎回ゼロから適用 = 単純で確実)
+function showReplay() {
+  board = structuredClone(INITIAL_BOARD);
+  hands = { s: [], g: [] };
+  selected = null; selectedHand = null; legal = [];
+  for (let i = 0; i < replay.n; i++) {
+    const m = replay.data[i];
+    if (m.drop) {
+      board[m.to[0]][m.to[1]] = m.piece;
+      const arr = hands[m.piece[0]];
+      const idx = arr.indexOf(m.piece.slice(1));
+      if (idx >= 0) arr.splice(idx, 1);
+    } else {
+      const target = board[m.to[0]][m.to[1]];
+      if (target !== "") hands[m.piece[0]].push(DEMOTE[target.slice(1)] || target.slice(1));
+      board[m.to[0]][m.to[1]] = m.piece;
+      board[m.from[0]][m.from[1]] = "";
+    }
+  }
+  moves = replay.data.slice(0, replay.n);   // 棋譜欄も n 手目まで追従
+  turn = replay.n % 2 === 0 ? "s" : "g";
+  statusEl.textContent = "再生中 📖 " + replay.n + " / " + replay.data.length + " 手";
+  render();
+}
+
+// 再生をやめて、まっさらな新規対局へ
+function exitReplay() {
+  replay = null;
+  board = structuredClone(INITIAL_BOARD);
+  moves = []; hands = { s: [], g: [] };
+  turn = "s"; selected = null; selectedHand = null; legal = [];
+  gameOver = false;
+  statusEl.textContent = "";
   render();
 }
 
