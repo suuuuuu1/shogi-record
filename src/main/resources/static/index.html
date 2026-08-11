@@ -86,7 +86,7 @@
 </style>
 </head>
 <body>
-<h1>将棋盤 v0.11 — 通信対局</h1>
+<h1>将棋盤 v0.12 — 1 vs 1</h1>
 <p id="turn">☗ 先手番</p>
 <p id="ws-status">⚪ 通信: 未接続</p>
 <div id="main">
@@ -109,7 +109,7 @@
   <button onclick="newGameClick()">新しい対局へ</button>
 </div>
 <p id="status"></p>
-<p id="note">2 つの画面で開くと、指した手がリアルタイムに相手の盤へ届く (v1: 両方とも初期配置から始めること)。</p>
+<p id="note">先着 1 人目が ☗ 先手、2 人目が ☖ 後手、3 人目からは観戦。自分の手番の自分の駒しか動かせない。</p>
 <script>
 // 盤面の「本体」はこの配列。s = 先手 (下)、g = 後手 (上)、"" = 空きマス
 const INITIAL_BOARD = [
@@ -134,6 +134,7 @@ let legal = [];          // 選択中の駒が行けるマス (打つ時は打�
 let hands = { s: [], g: [] };   // 駒台。取った駒の種類が並ぶ
 let replay = null;              // 再生モード {data, n}。通常対局中は null
 let gameOver = false;           // 詰みで対局終了したら true (保存かリセットで解除)
+let myRole = null;              // 座席係にもらう自分の役割: "s" 先手 / "g" 後手 / "spec" 観戦
 let turn = "s";        // 手番。s = 先手、g = 後手
 let moves = [];        // 棋譜の本体 = 指した手の列。「対局を保存する」= この配列を保存すること
 
@@ -315,6 +316,8 @@ function checkGameEnd() {
 // 駒台クリック係
 function onHandClick(owner, kind) {
   if (replay || gameOver) return;                // 再生中・終局後は触れない
+  if (myRole !== "s" && myRole !== "g") return;  // 観戦者は触れない
+  if (turn !== myRole) return;                   // 自分の手番の時だけ
   if (owner !== turn) return;                    // 手番側の駒台だけ触れる
   if (selectedHand && selectedHand.kind === kind) {
     selectedHand = null; legal = [];             // もう一回クリック → 解除
@@ -372,6 +375,8 @@ function render() {
 // クリック係: 「選択中かどうか」の 2 状態を行き来する
 function onCellClick(r, c) {
   if (replay || gameOver) return;          // 再生中・終局後は盤に触れない
+  if (myRole !== "s" && myRole !== "g") return;   // 観戦者 (と未着席) は触れない
+  if (turn !== myRole) return;             // 自分の手番の時だけ動かせる
   if (selectedHand !== null) {
     // 打つモード: 打てるマスなら打つ、自分の盤上の駒なら選択切り替え
     if (legal.some(([lr, lc]) => lr === r && lc === c)) {
@@ -576,12 +581,17 @@ function connectWS() {
     } else if (msg.type === "reset") {
       exitReplay();
       statusEl.textContent = "相手が新しい対局を始めたよ";
+    } else if (msg.type === "role") {
+      myRole = msg.role;
+      const label = myRole === "s" ? "☗ 先手" : myRole === "g" ? "☖ 後手" : "👀 観戦";
+      wsStatusEl.textContent = "🟢 接続中 — あなた: " + label;
     }
   };
 }
 
-// 「新しい対局へ」ボタン: 自分をリセットして、相手にも知らせる
+// 「新しい対局へ」ボタン: 自分をリセットして、相手にも知らせる (対局者のみ)
 function newGameClick() {
+  if (myRole === "spec") return;
   exitReplay();
   broadcast({ type: "reset" });
 }
