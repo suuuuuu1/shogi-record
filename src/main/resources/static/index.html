@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <title>将棋盤 v0.1</title>
+    <style>
+        body {
+          font-family: "Hiragino Sans", "Yu Gothic", sans-serif;
+          background: #f5f0e6;
+          display: flex;
+          flex-direction: column;
+          align-items: center;
+          margin-top: 24px;
+        }
+        h1 { font-size: 20px; color: #5a4632; }
+        #board {
+          display: grid;
+          grid-template-columns: repeat(9, 52px);
+          grid-template-rows: repeat(9, 56px);
+          background: #e8b95c;
+          border: 3px solid #5a4632;
+        }
+        .cell {
+          border: 1px solid #7a5c3a;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          font-size: 30px;
+          cursor: pointer;
+          user-select: none;
+        }
+        .gote { transform: rotate(180deg); }
+        #note { color: #8a7a66; font-size: 13px; margin-top: 12px; }
+    </style>
+</head>
+<body>
+<h1>将棋盤 v0.1 — Phase 6</h1>
+<div id="board"></div>
+<p id="note">盤面はデータ (board 配列)、画面はその写し (render)。駒を動かすのは Phase 7 で。</p>
+<script>
+    // 盤面の「本体」はこの配列。s = 先手 (下)、g = 後手 (上)、"" = 空きマス
+    let board = [
+      ["g香","g桂","g銀","g金","g玉","g金","g銀","g桂","g香"],
+      ["",  "g飛","",  "",  "",  "",  "",  "g角",""  ],
+      ["g歩","g歩","g歩","g歩","g歩","g歩","g歩","g歩","g歩"],
+      ["",  "",  "",  "",  "",  "",  "",  "",  ""  ],
+      ["",  "",  "",  "",  "",  "",  "",  "",  ""  ],
+      ["",  "",  "",  "",  "",  "",  "",  "",  ""  ],
+      ["s歩","s歩","s歩","s歩","s歩","s歩","s歩","s歩","s歩"],
+      ["",  "s角","",  "",  "",  "",  "",  "s飛",""  ],
+      ["s香","s桂","s銀","s金","s王","s金","s銀","s桂","s香"],
+    ];
+
+    const boardEl = document.getElementById("board");
+
+    // board 配列の中身を、画面のマス目に描き写す係
+    function render() {
+      boardEl.innerHTML = "";
+      for (let r = 0; r < 9; r++) {
+        for (let c = 0; c < 9; c++) {
+          const cell = document.createElement("div");
+          cell.className = "cell";
+          const piece = board[r][c];
+          if (piece) {
+            const span = document.createElement("span");
+            span.textContent = piece.slice(1);      // "s歩" → "歩"
+            if (piece[0] === "g") span.className = "gote";  // 後手の駒は 180 度回転
+            cell.appendChild(span);
+          }
+          boardEl.appendChild(cell);
+        }
+      }
+    }
+
+    render();
+</script>
+</body>
+</html>

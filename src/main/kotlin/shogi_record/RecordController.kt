@@ -65,4 +65,16 @@ class RecordController(private val jdbc: JdbcTemplate) {
         val count = jdbc.update("DELETE FROM records WHERE id = ?", id)
         return mapOf("deleted" to (count == 1))
     }
+
+    @GetMapping("/stats")
+    fun stats(): List<Map<String, Any?>> =
+        jdbc.queryForList("""
+        SELECT opening,
+               COUNT(*) AS games,
+               SUM(CASE WHEN result = 'win' THEN 1 ELSE 0 END) AS wins,
+               ROUND(100.0 * SUM(CASE WHEN result = 'win' THEN 1 ELSE 0 END) / COUNT(*), 1) AS win_rate
+        FROM records
+        GROUP BY opening
+        ORDER BY games DESC
+    """.trimIndent())
 }
